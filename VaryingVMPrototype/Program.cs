@@ -1,296 +1,87 @@
-﻿using System.Linq.Expressions;
+﻿using System.Numerics;
 
 namespace VaryingFromExpression;
 
-interface IAlgebra<TR>
+using System.Linq.Expressions;
+
+class SyntaxTestCase
 {
-    TR Symbol();
-    TR Lit(float value);
-    TR Multiply(TR left, TR right);
-    TR Add(TR left, TR right);
-}
+    readonly string name;
+    public readonly IVaryingSyntax Syntax;
 
-interface ISyntax
-{
-    TR Evaluate<TR>(IAlgebra<TR> algebra);
-}
-
-record struct SymbolFreeSyntax : ISyntax
-{
-    public TR Evaluate<TR>(IAlgebra<TR> algebra) => algebra.Symbol();
-}
-
-record struct LitFreeSyntax(float Value) : ISyntax
-{
-    public TR Evaluate<TR>(IAlgebra<TR> algebra) => algebra.Lit(Value);
-}
-
-record struct MultipleSyntax(ISyntax Left, ISyntax Right) : ISyntax
-{
-    public TR Evaluate<TR>(IAlgebra<TR> algebra) => algebra.Multiply(Left.Evaluate(algebra), Right.Evaluate(algebra));
-}
-
-record struct AddFreeSyntax(ISyntax Left, ISyntax Right) : ISyntax
-{
-    public TR Evaluate<TR>(IAlgebra<TR> algebra) => algebra.Add(Left.Evaluate(algebra), Right.Evaluate(algebra));
-}
-
-struct FreeSyntaxAlgebra : IAlgebra<ISyntax>
-{
-    public ISyntax Symbol()
-        => new SymbolFreeSyntax();
-
-    public ISyntax Lit(float value)
-        => new LitFreeSyntax(value);
-
-    public ISyntax Multiply(ISyntax left, ISyntax right)
-        => new MultipleSyntax(left, right);
-
-    public ISyntax Add(ISyntax left, ISyntax right)
-        => new AddFreeSyntax(left, right);
-}
-
-class InterpretAlgebra : IAlgebra<Func<float, float>>
-{
-    public Func<float, float> Symbol() => t => t;
-    public Func<float, float> Lit(float value) => t => value;
-
-    public Func<float, float> Multiply(Func<float, float> left, Func<float, float> right) =>
-        t => left(t) * right(t);
-
-    public Func<float, float> Add(Func<float, float> left, Func<float, float> right) => t => left(t) + right(t);
-}
-
-class PolynomialAlgebra : IAlgebra<IVarying<float>>
-{
-    public IVarying<float> Symbol() => Varying.T();
-    public IVarying<float> Lit(float value) => Varying.Polynomial(value);
-
-    public IVarying<float> Multiply(IVarying<float> left, IVarying<float> right)
-        => (left, right) switch
-        {
-            (Polynomial0 pl, Polynomial0 pr) => Varying.Mul(pl, pr),
-            (Polynomial0 pl, Polynomial1 pr) => Varying.Mul(pl, pr),
-            (Polynomial0 pl, Polynomial2 pr) => Varying.Mul(pl, pr),
-            (Polynomial1 pl, Polynomial0 pr) => Varying.Mul(pr, pl),
-            (Polynomial1 pl, Polynomial1 pr) => Varying.Mul(pl, pr),
-            (Polynomial1 pl, Polynomial2 pr) => Varying.Mul(pl, pr),
-            (Polynomial2 pl, Polynomial0 pr) => Varying.Mul(pr, pl),
-            (Polynomial2 pl, Polynomial1 pr) => Varying.Mul(pr, pl),
-            _ => throw new NotImplementedException()
-        };
-
-
-    public IVarying<float> Add(IVarying<float> left, IVarying<float> right)
-        => (left, right) switch
-        {
-            (Polynomial0 pl, Polynomial0 pr) => Varying.Add(pl, pr),
-            (Polynomial0 pl, Polynomial1 pr) => Varying.Add(pl, pr),
-            (Polynomial0 pl, Polynomial2 pr) => Varying.Add(pl, pr),
-            (Polynomial1 pl, Polynomial0 pr) => Varying.Add(pr, pl),
-            (Polynomial1 pl, Polynomial1 pr) => Varying.Add(pl, pr),
-            (Polynomial1 pl, Polynomial2 pr) => Varying.Add(pl, pr),
-            (Polynomial2 pl, Polynomial0 pr) => Varying.Add(pr, pl),
-            (Polynomial2 pl, Polynomial1 pr) => Varying.Add(pr, pl),
-            (Polynomial2 pl, Polynomial2 pr) => Varying.Add(pl, pr),
-            _ => throw new NotImplementedException()
-        };
-}
-
-record struct PolynomialAsSyntax(IVarying<float> Polynomial) : ISyntax
-{
-    record struct Impl : IVarying<float>.IPattern<ISyntax>
+    public SyntaxTestCase(string name, IVaryingSyntax syntax)
     {
-        public ISyntax Polynomial0(in Polynomial0 p)
-            => new LitFreeSyntax(p.Value);
-
-        public ISyntax Polynomial1(in Polynomial1 p)
-        {
-            if (p.Coefficients.X == 0.0f && Math.Abs(p.Coefficients.Y - 1.0f) < 1e-5f)
-            {
-                return new SymbolFreeSyntax();
-            }
-            else
-            {
-                var a1 = p.Coefficients.Y;
-                var a0 = p.Coefficients.X;
-                return Extensions.FromExpression(t => a1 * t + a0);
-            }
-        }
-
-        public ISyntax Polynomial2(in Polynomial2 p)
-        {
-            var a2 = p.Coefficients.Z;
-            var a1 = p.Coefficients.Y;
-            var a0 = p.Coefficients.X;
-            return Extensions.FromExpression(t => a2 * t * t + a1 * t + a0);
-        }
-
-        public ISyntax Polynomial3(in Polynomial3 p)
-        {
-            throw new NotImplementedException();
-        }
+        Syntax = syntax;
+        this.name = name;
     }
 
-    public TR Evaluate<TR>(IAlgebra<TR> algebra)
-        => algebra.Compile(Polynomial.Match(new Impl()));
-}
+    public string Name => name;
+    protected virtual void PrintExpression() { }
 
-struct PrintCode : IAlgebra<string>
-{
-    public string Symbol()
-        => "t";
-
-    public string Lit(float value)
-        => value.ToString();
-
-    public string Multiply(string left, string right)
-        => $"({left} * {right})";
-
-    public string Add(string left, string right)
-        => $"({left} + {right})";
-}
-
-class PureExpressionVisitor<TR> : ExpressionVisitor
-{
-    public TR? Result;
-    public IAlgebra<TR> Visitor { get; init; }
-
-    protected override Expression VisitConstant(ConstantExpression node)
+    protected virtual void PrintTestValue(float t)
     {
-        if (node.Type == typeof(float) && node.Value is float v)
-        {
-            Result = Visitor.Lit(v);
-        }
-
-        return base.VisitConstant(node);
+        Console.WriteLine($"InHouseValue({t}) = {Syntax.ToFunc()(t)}");
+        Console.WriteLine($"PolynomialValue({t}) = {Syntax.ToPolynomialSyntax().ToPolynomialBurst().Sample(t)}");
     }
 
-    protected override Expression VisitParameter(ParameterExpression node)
+    void PrintPolynomial()
     {
-        Result = Visitor.Symbol();
-        return node;
+        Console.WriteLine($"Poly<{Syntax.ToPolynomialSyntax()}>");
     }
 
-    protected override Expression VisitLambda<T>(Expression<T> node)
+    void PrintTestValue4(Vector4 testT)
     {
-        if (node.Parameters.Count != 1 || node.Parameters[0].Type != typeof(float))
-        {
-            throw new NotImplementedException();
-        }
-
-        Visit(node.Body);
-        return node;
+        Console.WriteLine($"PolynomailValue({testT}) = {Syntax.ToPolynomialSyntax().ToPolynomialBurst().Sample(testT)}");
     }
 
-    protected override Expression VisitMember(MemberExpression node)
+    void PrintFreeSyntax()
     {
-        var e = node.Expression;
-        if (e is ConstantExpression ce)
-        {
-            Result = Visitor.Lit((float)ce.Value.GetType().GetField(node.Member.Name).GetValue(ce.Value));
-        }
-        else
-        {
-            Visit(node.Expression);
-        }
-
-        return node;
+        Console.WriteLine($"FreeSyntax<{Syntax}>");
     }
 
-    protected override Expression VisitBinary(BinaryExpression node)
+    void PrintHlsl()
     {
-        Visit(node.Left);
-        var l = Result;
-        if (l is null)
-        {
-            throw new Exception();
-        }
+        Console.WriteLine($"Hlsl<{Syntax.ToHlslCode()}>");
+    }
 
-        Visit(node.Right);
-        var r = Result;
-        if (r is null)
-        {
-            throw new Exception();
-        }
+    void PrintExpressionFromFreeSyntax()
+    {
+        Console.WriteLine($"ExprFromSyntax<{Syntax.ToExpression()}>");
+    }
 
-        if (node.NodeType == ExpressionType.Multiply)
-        {
-            Result = Visitor.Multiply(l, r);
-            return node;
-        }
-
-        if (node.NodeType == ExpressionType.Add)
-        {
-            Result = Visitor.Add(l, r);
-            return node;
-        }
-
-
-        return node;
+    public void Report(float t, Vector4 t4)
+    {
+        Console.WriteLine($"Test Case: {Name}");
+        PrintExpression();
+        PrintFreeSyntax();
+        PrintExpressionFromFreeSyntax();
+        PrintHlsl();
+        PrintPolynomial();
+        PrintTestValue(t);
+        PrintTestValue4(t4);
+        Console.WriteLine($"==========");
     }
 }
 
-record struct SubstituteAlgebra(ISyntax NewSymbol) : IAlgebra<ISyntax>
+class ExpressionTestCase : SyntaxTestCase
 {
-    public ISyntax Symbol() => NewSymbol;
+    readonly Expression<Func<float, float>> expr;
 
-
-    public ISyntax Lit(float value) => new LitFreeSyntax(value);
-
-
-    public ISyntax Multiply(ISyntax left, ISyntax right) => new MultipleSyntax(left, right);
-
-
-    public ISyntax Add(ISyntax left, ISyntax right)
-        => new AddFreeSyntax(left, right);
-}
-
-static class Extensions
-{
-    public static TR Compile<TR>(this IAlgebra<TR> compiler, Expression<Func<float, float>> code)
+    public ExpressionTestCase(string name, Expression<Func<float, float>> expr)
+        : base(name, expr.ToVaryingSyntax())
     {
-        var visitor = new PureExpressionVisitor<TR>()
-        {
-            Visitor = compiler
-        };
-        visitor.Visit(code);
-        if (visitor.Result is null)
-        {
-            throw new Exception();
-        }
-        else
-        {
-            return visitor.Result;
-        }
+        this.expr = expr;
     }
 
-    public static TR Compile<TR>(this IAlgebra<TR> compiler, ISyntax code) => code.Evaluate(compiler);
-
-    public static ISyntax Substitute(this ISyntax code, ISyntax symbol)
-        => code.Evaluate(new SubstituteAlgebra(symbol));
-
-    public static ISyntax FromExpression(Expression<Func<float, float>> e) => new FreeSyntaxAlgebra().Compile(e);
-
-    public static IVarying<float> ToPolynomial(this ISyntax code) => new PolynomialAlgebra().Compile(code);
-    public static ISyntax ToCode(this IVarying<float> code) => new PolynomialAsSyntax(code);
-}
-
-record struct ReportTestCase(Expression<Func<float, float>> Expr)
-{
-    public void Report(float testT)
+    protected override void PrintExpression()
     {
-        var cSharpInterpreter = new InterpretAlgebra();
-        var polynomial = new PolynomialAlgebra();
-        var p = polynomial.Compile(Expr);
-        var vInHouse = cSharpInterpreter.Compile(Expr)(testT);
-        var vReference = Expr.Compile()(testT);
-        var freeCode = new FreeSyntaxAlgebra().Compile(Expr);
-        Console.WriteLine($"Expr<{Expr}>");
-        Console.WriteLine($"Poly<{p}>");
-        Console.WriteLine($"Value({testT})<Reference={vReference},InHouse={vInHouse}>");
-        Console.WriteLine($"FreeCode<{freeCode}>");
-        Console.WriteLine("---");
+        Console.WriteLine($"Expr<{expr}>");
+    }
+
+    protected override void PrintTestValue(float t)
+    {
+        Console.WriteLine($"ReferenceValue({t}) = {expr.Compile()(t)}");
+        base.PrintTestValue(t);
     }
 }
 
@@ -301,32 +92,36 @@ static internal class Program
         Expression<Func<float, float>> tPlusOneSquare = t => t * t + 2.0f * t + 1.0f;
         Expression<Func<float, float>> tPlusOne = t => t + 1.0f;
         Expression<Func<float, float>> tSquare = t => t * t;
-        var toSyntax = new FreeSyntaxAlgebra();
 
-        var testCases = new Expression<Func<float, float>>[]
+        var expressionTestCases = new SyntaxTestCase[]
         {
-            t => 42,
-            t => t,
-            t => 3.0f * t,
-            t => 1.0f + t + 2.0f * t,
-            tPlusOneSquare,
-            tPlusOne,
+            new ExpressionTestCase("constant 42", t => 42),
+            new ExpressionTestCase("t", t => t),
+            new ExpressionTestCase("3 * t", t => 3.0f * t),
+            new ExpressionTestCase("complex expression", t => 1.0f + t + 2.0f * t),
+            new ExpressionTestCase("t^2 + 2t + 1", tPlusOneSquare),
+            new ExpressionTestCase("t + 1", tPlusOne),
         };
 
+        var tPlusOneSquareHigerOrder = tSquare.ToVaryingSyntax().Substitute(tPlusOne.ToVaryingSyntax());
+        var higherOrderTest = tPlusOneSquareHigerOrder.Offset(1.0f).Scale(2.0f);
+        var syntaxTestCases = new SyntaxTestCase[]
+        {
+            new("composite (t+1)^2", tPlusOneSquareHigerOrder),
+            // Polynomial optimizer provides partial evaluation to optimize chained add and mul 
+            new("composite (t+1)^2 optimized", tPlusOneSquareHigerOrder.ToPolynomialSyntax().ToOptimized().ToVaryingSyntax()),
+            new("composite (t+1)^2 offset 1 scale 2", higherOrderTest),
+            new("composite (t+1)^2 offset 1 scale 2 optimized", higherOrderTest.ToPolynomialSyntax().ToOptimized().ToVaryingSyntax()),
+            // Implemented lerp using meta-programming assuming lerp is not supported by VM
+            new("lerp test", Varying.Lerp(tPlusOne.ToVaryingSyntax(), tSquare.ToVaryingSyntax(), Varying.Symbol)),
+            new("random test case", Varying.Random),
+            new("random between test case", Varying.Lerp(Varying.Lit(0.0f), Varying.Symbol, Varying.Random))
+        };
+        var testCases = expressionTestCases.Concat(syntaxTestCases).ToArray();
 
         foreach (var tc in testCases)
         {
-            new ReportTestCase(tc).Report(1.0f);
+            tc.Report((float)Math.PI, new((float)Math.PI, -1.0f, 0.0f, 1.0f));
         }
-
-        var tSquareCode = toSyntax.Compile(tSquare);
-        var tPlusOneCode = toSyntax.Compile(tPlusOne);
-        var tPlusOneSquareComposite = tSquareCode.Substitute(tPlusOneCode);
-        var tPlusOnePolynomial = new PolynomialAlgebra().Compile(tPlusOneSquareComposite);
-        Console.WriteLine($"Composite result: {tPlusOnePolynomial}");
-
-        Console.WriteLine(toSyntax.Compile(new PolynomialAsSyntax(new Polynomial0(42.0f))));
-        Console.WriteLine(toSyntax.Compile(tPlusOnePolynomial.ToCode()));
-        Console.WriteLine(new PrintCode().Compile(toSyntax.Compile(tPlusOnePolynomial.ToCode())));
     }
 }
